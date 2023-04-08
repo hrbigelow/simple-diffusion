@@ -4,52 +4,31 @@ import torch as t
 from torch import nn
 from torch.utils.data import DataLoader
 from torch.optim import Adam
+from torch.distributions.normal import Normal
 from streamvis import Client
 import util
+import models
 
 def swissroll():
-    # Make the swiss roll dataset
+    # Make the swiss roll dataset with zero mean, unit sd
     N = 1000
     phi = np.random.rand(N) * 3*np.pi + 1.5*np.pi
     x = phi * np.cos(phi)
     y = phi * np.sin(phi)
-    return np.stack((x, y), axis=1)
-
-def reshape(ten, *dims):
-    # reshape a tensor, using the current shape where dims[i] is None
-    dims = [tdim if dim is None else dim for tdim, dim in zip(ten.shape, dims)]
-    return ten.reshape(*dims)
-
-class RBFNetwork(nn.Module):
-    def __init__(self, D=2, T=40, H=16):
-        super().__init__()
-        norm = t.distributions.Normal(0.5, 1.0)
-        self.centers = nn.Parameter(norm.sample((D, H)))
-        self.mu_alphas = nn.Parameter(t.full((T, H, D), 1.0))
-        self.sigma_alphas = nn.Parameter(t.full((T, H, D), 1.0))
-
-    def forward(self, xcond):
-        # x: B, T, D
-        # dists: B, H
-        # returns: B, T, D
-        # B, T, D, H -> B, T, H
-        dists = ((xcond.unsqueeze(-1) - self.centers) ** 2).sum(dim=2)
-
-        # B, T, H, D -> B, T, D
-        mu = (dists.unsqueeze(-1) * self.mu_alphas).sum(dim=2)
-        sigma = (dists.unsqueeze(-1) * self.sigma_alphas).sum(dim=2)
-        sigma = t.sigmoid(sigma)
-        return mu, sigma 
+    data = np.stack((x, y), axis=1)
+    data -= data.mean(axis=0)
+    data /= data.std()
+    return data
 
 def main(batch_size, sample_size, lr):
     client = Client('localhost', 8080, 'swissroll')
-    client.init('swiss_roll')
     # client.update('swiss_roll', 0, { 'x': x.tolist(), 'y': y.tolist() })
 
     T = 40
     betas = t.linspace(1e-4, 0.1, T)
-    Q = util.QDist(sample_size, betas)
-    P = util.PDist(RBFNetwork())
+    Q = models.QDist(sample_size, betas)
+    rbf = models.RBFNetwork()
+    P = models.PDist(rbf)
     data = swissroll()
     dataset = util.TensorDataset(data)
     sampler = util.LoopingRandomSampler(dataset)
@@ -57,6 +36,15 @@ def main(batch_size, sample_size, lr):
     opt = Adam(P.parameters(), lr)
 
     iloader = iter(loader)
+    inspect_layer = 5
+
+    client.init('loss', 'centers', 'sigmas', 'mu_alphas10', 'sigma_alphas',
+            'grid_mu10', 'grid_sigma10')
+    inspect_layers = list(range(0, T))
+
+    # client.init((f'q{t}' for t in inspect_layers))
+    # client.init('loss', 'q')
+
     for step in range(10000):
         batch = next(iloader)
         x = Q.sample(batch)
@@ -65,7 +53,52 @@ def main(batch_size, sample_size, lr):
         P.zero_grad()
         loss.backward()
         opt.step()
-        print(f'loss = {loss.item():5.3f}')
+        client.updatel('loss', step, dict(x=step,y=loss.item()))
+        if step % 10 == 0:
+            print(f'step = {step}, loss = {loss.item():5.3f}')
+
+        """
+        # B*P, T+1, D
+        xgrid = util.make_grid(x, grid_dim=1, spatial_dim=2, ncols=8)
+        xgrid = xgrid.flatten(0,1)
+        client.update('q', step, xydict(xgrid))
+        """
+        sigma_alphas = util.to_dict(util.dim_to_data(rbf.sigma_alphas, 0), 'xyz')
+
+        client.update('centers', step, util.to_dict(rbf.centers, 'xy')) 
+        client.update('sigmas', step, util.to_dict(rbf.sigmas, 'xy'))
+        # client.update('mu_alphas10', step, xydict(rbf.mu_alphas[inspect_layer]))
+        client.update('sigma_alphas', step, sigma_alphas)
+
+        with t.no_grad():
+            ntick = 10
+            ls = t.linspace(-1, 1, ntick)
+            # T, B, D
+            grid = t.dstack(t.meshgrid(ls, ls)).reshape(ntick*ntick, 2)
+            grid_mu, grid_sigma = P.model(grid.expand(T, *grid.shape))
+
+            # T, B, D+D
+            mu = t.dstack((grid, grid + grid_mu))
+
+
+
+        with t.no_grad():
+            ntick = 10
+            ls = t.linspace(-1, 1, ntick)
+            grid = t.dstack(t.meshgrid(ls, ls)).reshape(ntick*ntick, 2)
+            grid_mu, grid_sigma = P.model(grid, inspect_layer)
+            mu = t.dstack((grid, grid + grid_mu))
+            mu_x, mu_y = mu[:,0,:].tolist(), mu[:,1,:].tolist()
+            sigma_x = grid[:,0].tolist()
+            sigma_y = grid[:,1].tolist()
+            sigma_z = grid_sigma[:,0].tolist() # only look at x dimension 0
+
+            client.update('grid_mu10', step, dict(zip('xy', [mu_x, mu_y])))
+            client.update('grid_sigma10', step, dict(zip('xyz', [sigma_x, sigma_y,
+                sigma_z])))
+
+        # if step % 1000 == 0:
+            # client.update('psamples', step, xydict(P.sample(1000)))
 
 if __name__ == '__main__':
     fire.Fire(main)

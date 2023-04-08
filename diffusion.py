@@ -183,21 +183,6 @@ def train(host, port, run_name, lr, every, batch_size, nmix, T):
             data = { 'x': centers.tolist(), 'y': histo.tolist() }
             data_client.update('psamples', step, data)
 
-
-def showq(timestep, T, batch_size):
-    betas = t.linspace(1e-4, 0.02, num_timesteps)
-    Q = QDist(batch_size, betas)
-    # dataset = t.tensor([0.25, 0.44, 0.98])
-    dataset = t.tensor([0.001, 0.999])
-    x = Q.sample(dataset)
-    xt = x[:, timestep]
-
-    plt.hist(xt.tolist(), bins=100, alpha=0.5, color='blue')
-    plt.show()
-
-    # for ts in range(1, num_timesteps, 10):
-        # xt = x[:, ts]
-
 def main():
     func_map = { 'train': train, 'showq': showq }
     fire.Fire(func_map)

@@ -1,7 +1,5 @@
 from sys import stderr
 import torch as t
-from torch import nn
-from torch.distributions.log_normal import Normal
 from torch.utils.data import Dataset, DataLoader, Sampler
 
 class TensorDataset(Dataset):
@@ -40,64 +38,76 @@ class LoopingRandomSampler(Sampler):
     def __len__(self):
         return int(2**31)
 
-
-class QDist:
+def slice_min(data, slice_dim):
     """
-    Generate samples from q(x^{0:T})
+    Find the min along the slice_dim
+    Returns a tensor of shape data.shape[slice_dim] 
     """
-    def __init__(self, sample_size, betas):
-        self.sample_size = sample_size
-        self.betas = betas
-        self.alpha = (1.0 - self.betas) ** 0.5
-        self.cond = [ Normal(0, beta) for beta in self.betas]
+    ans = data
+    for d in range(data.ndim):
+        if d == slice_dim:
+            continue
+        ans = ans.min(dim=0)[0]
+    return ans 
 
-    def sample(self, x0):
-        """
-        x0: P, D
-        returns: B * P, T+1, D  (batch, num_points, num_timesteps+1)
-        """
-        # sample a 'trajectory'
-        xi_pre = x0.repeat(self.sample_size, 1)
-        total_reps = xi_pre.shape[0]
-        x = [xi_pre]
-        for cond, alpha in zip(self.cond, self.alpha):
-            xi = cond.sample(xi_pre.shape) + alpha * xi_pre  
-            xi_pre = xi
-            x.append(xi)
-        res = t.stack(x, dim=1)
-        return res
+def slice_max(data, slice_dim):
+    ans = data
+    for d in range(data.ndim):
+        if d == slice_dim:
+            continue
+        ans = ans.max(dim=0)[0]
+    return ans 
 
-class PDist(nn.Module):
+def make_grid(data, grid_dim, spatial_dim, ncols, pad_factor=1.2):
     """
-    Accepts a mu_sigma_model, which is an nn.Module which 
+    data: tensor with data.shape[spatial_dim] == 2 
+    Transform data by spacing it out evenly across an nrows x ncols grid
+    according to the index of grid_dim
+    return: gridded data
     """
-    def __init__(self, mu_sigma_model):
-        super().__init__()
-        self.model = mu_sigma_model
+    if grid_dim >= data.ndim:
+        raise RuntimeError(f'grid_dim = {grid_dim} must be < data.ndim (= {data.ndim})')
+    if spatial_dim >= data.ndim or data.shape[spatial_dim] != 2:
+        raise RuntimeError(
+            f'spatial_dim = {spatial_dim} but data.shape[{spatial_dim}] either doesn\'t '
+            f'exist or doesn\'t equal 2')
+    
+    strides = (slice_max(data, spatial_dim) - slice_min(data, spatial_dim)) * pad_factor
+    G = data.shape[grid_dim]
 
-    @staticmethod
-    def log_gaussian_density(x, mu, sigma):
-        """
-        x: B, dims
-        mu, sigma: dims
-        return: B, dims
-        """
-        scaled_dist = (x - mu) / sigma
-        expon = -0.5 * scaled_dist ** 2
-        log_sqrt_2pi = 0.5 * t.log(t.tensor(2 * 3.1415927410125732))
-        log_density = - t.log(sigma) - log_sqrt_2pi + expon
-        return log_density
+    cols = (t.arange(G) % ncols)
+    rows = (t.arange(G) // ncols)
 
-    def forward(self, x):
-        """
-        x: B, T, D
-        returns: B, T
-        """
-        xvar, xcond = x[:,:-1], x[:,1:]
-        mu, sigma = self.model(xcond)
-        log_density = self.log_gaussian_density(xvar, xcond + mu, sigma)
-        return log_density
+    # G, 2
+    bcast = [ 1 if i not in (grid_dim, spatial_dim) else d for i, d in enumerate(data.shape) ]
+    grid = t.dstack((cols, rows)) * strides
+    grid_data = data + grid.reshape(*bcast)
+    return grid_data
 
+def dim_to_data(data, dim):
+    """
+    Increase the size of the last dimension with the dim index
+    """
+    if dim >= data.ndim - 1:
+        raise RuntimeError(
+            f'Got dim = {dim}, data.ndim = {data.ndim}. dim must be < data.ndim-1')
+    D = data.shape[dim]
+    bcast = tuple(D if i == dim else 1 for i in range(data.ndim))
+    vals = t.arange(D).reshape(*bcast).expand(*data.shape[:-1], 1)
+    return t.cat((data, vals), data.ndim-1)
+
+def to_dict(data, key_string):
+    """
+    data: bdims, D
+    key_string: string of length D
+    output: { key_string[i] => data[...,i] values as a 1D list } 
+    """
+    if data.shape[-1] != len(key_string):
+        raise RuntimeError(
+            f'data.shape[-1] (= {data.shape[-1]} must equal '
+            f'len(key_string (= {key_string})')
+    lol = data.flatten(0, data.ndim-2).permute(1, 0).tolist()
+    return dict(zip(key_string, lol))
 
 
 
