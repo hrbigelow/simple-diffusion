@@ -2,6 +2,7 @@ import torch as t
 from torch import nn
 from torch.distributions.log_normal import Normal
 import funcs
+import pdb
 
 class RBFNetwork(nn.Module):
     """
@@ -11,18 +12,24 @@ class RBFNetwork(nn.Module):
       top layer weights are specific to each timestep
       all other weights shared across mu, sigma, and across all timesteps
     """
-    def __init__(self, D=2, T=40, H=16):
+    def __init__(self, D=2, T=40, Hsqrt=4):
         super().__init__()
         self.T = T
         self.D = D
-        self.H = H
-        self.centers = nn.Parameter(t.randn((H, D)))
-        self.sigmas = nn.Parameter(t.sigmoid(t.full((H, D), -0.5)))
-        self.mu_alphas = nn.Parameter(t.full((T, H, D), 0.0))
-        self.sigma_alphas = nn.Parameter(t.full((T, H, D), -2.0))
+        self.H = Hsqrt ** 2
+        ls = t.linspace(-2, 2, Hsqrt)
+        pts = t.cartesian_prod(ls, ls)
+        self.basis_centers = nn.Parameter(pts)
+        self.basis_sigma_logits = nn.Parameter(t.full((self.H, self.D), -0.5))
+        self.mu_alphas = nn.Parameter(t.full((self.T, self.H, self.D), 0.0))
+        self.sigma_alphas = nn.Parameter(t.full((self.T, self.H, self.D), -2.0))
 
     def xdim(self):
         return self.D 
+
+    @property
+    def basis_sigmas(self):
+        return t.sigmoid(self.basis_sigma_logits)
 
     def forward(self, xcond, ts=None):
         """
@@ -53,7 +60,8 @@ class RBFNetwork(nn.Module):
             sigma_alphas = self.sigma_alphas[ts].unsqueeze(0)
 
         # B, Tdim, H
-        pdf = funcs.combo_isonormal_pdf(xcond, self.centers, self.sigmas)
+        basis_sigmas = t.sigmoid(self.basis_sigma_logits)
+        pdf = funcs.combo_isonormal_pdf(xcond, self.basis_centers, basis_sigmas)
 
         # B, Tdim, 1
         normalizer = pdf.sum(-1, True) ** -1
@@ -66,6 +74,9 @@ class RBFNetwork(nn.Module):
         if ts is not None:
             mu = mu.squeeze(1)
             sigma = sigma.squeeze(1)
+
+        if t.any(t.isnan(pdf)) or t.any(t.isnan(normalizer)) or t.any(t.isnan(mu)) or t.any(t.isnan(sigma)):
+            pdb.set_trace()
 
         return mu, sigma
 
@@ -114,11 +125,17 @@ class PDist(nn.Module):
         return log_density
 
     def sample(self, n):
+        """
+        returns: n, T, D 
+        """
+        xcond = Normal(0, 1).sample((n,self.model.xdim()))
+        steps = [xcond]
         with t.no_grad():
-            xcond = Normal(0, 1).sample((n,self.model.xdim()))
             for ts in reversed(range(self.model.T)):
                 mu, sigma = self.model(xcond, ts)
-                xcond = Normal(mu, sigma).sample()
-        return xcond
+                xcond = Normal(xcond + mu, sigma).sample()
+                steps.append(xcond)
+        res = t.stack(tuple(reversed(steps)), dim=1)
+        return res
 
 

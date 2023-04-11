@@ -63,6 +63,7 @@ def make_grid(data, grid_dim, spatial_dim, ncols, pad_factor=1.2):
     data: tensor with data.shape[spatial_dim] == 2 
     Transform data by spacing it out evenly across an nrows x ncols grid
     according to the index of grid_dim
+    spatial_dim: the spatial dimension being augmented
     return: gridded data
     """
     if grid_dim >= data.ndim:
@@ -73,6 +74,7 @@ def make_grid(data, grid_dim, spatial_dim, ncols, pad_factor=1.2):
             f'exist or doesn\'t equal 2')
     
     strides = (slice_max(data, spatial_dim) - slice_min(data, spatial_dim)) * pad_factor
+    strides[1] *= -1 # flip y, so the grid is left-to-right, top-to-bottom
     G = data.shape[grid_dim]
 
     cols = (t.arange(G) % ncols)
@@ -86,28 +88,54 @@ def make_grid(data, grid_dim, spatial_dim, ncols, pad_factor=1.2):
 
 def dim_to_data(data, dim):
     """
-    Increase the size of the last dimension with the dim index
+    Increase the size of the last dimension by 1, by injecting dim index value
+    into the tensor cell value.
     """
-    if dim >= data.ndim - 1:
+    if dim > data.ndim - 1:
         raise RuntimeError(
-            f'Got dim = {dim}, data.ndim = {data.ndim}. dim must be < data.ndim-1')
+                f'dim_to_data: Got dim = {dim}, data.ndim = {data.ndim}. '
+                f'dim must be < data.ndim-1')
     D = data.shape[dim]
     bcast = tuple(D if i == dim else 1 for i in range(data.ndim))
     vals = t.arange(D).reshape(*bcast).expand(*data.shape[:-1], 1)
     return t.cat((data, vals), data.ndim-1)
 
-def to_dict(data, key_string):
+def to_dict(data, key_dim, val_dims=(), key_string='xy'):
     """
-    data: bdims, D
-    key_string: string of length D
-    output: { key_string[i] => data[...,i] values as a 1D list } 
+    data has an unspecified shape but contains key_dim, val_dims.
+    data is first permuted to shape key_dim, *other_dims, *val_dims
+    other_dims are collapsed, and each slice along key_dim is packaged into
+    C, *val_dims list of lists.
+    Returns: { key_string[key_dim] => list: C x *val_dims }
     """
-    if data.shape[-1] != len(key_string):
+    if not all(d < data.ndim for d in val_dims + (key_dim,)):
         raise RuntimeError(
-            f'data.shape[-1] (= {data.shape[-1]} must equal '
-            f'len(key_string (= {key_string})')
-    lol = data.flatten(0, data.ndim-2).permute(1, 0).tolist()
-    return dict(zip(key_string, lol))
+            f'One of key_dim or val_dims is out of bounds.  data.ndim = {data.ndim} '
+            f'but key_dim = {key_dim}, val_dims = {val_dims}')
+    if data.shape[key_dim] != len(key_string):
+        raise RuntimeError(
+            f'data.shape[key_dim] must equal lengh of key_string.  Got '
+            f'data.shape[key_dim] = {data.shape[key_dim]}, key_string = {key_string}')
+    if key_dim in val_dims:
+        raise RuntimeError(
+            f'key_dim must not be in val_dims. Got key_dim = {key_dim}, '
+            f'val_dims = {val_dims}')
+
+    other_dims = tuple(d for d in range(data.ndim) if d not in val_dims + (key_dim,))
+    # permute key_dim to start, val_dims to end
+    data = data.permute(key_dim, *other_dims, *val_dims).flatten(1, len(other_dims))
+    dmap = dict(zip(key_string, data.tolist()))
+    return dmap
+
+
+
+
+
+
+
+
+
+
 
 
 
