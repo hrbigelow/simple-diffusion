@@ -60,25 +60,14 @@ def main(batch_size, sample_size, lr, port=8081):
 
         # T,1
         loss_vis = -log_dens.mean(dim=0).unsqueeze(-1)
-
-        # T,2
-        # loss_vis = util.dim_to_data(loss_vis, 0)
-
         # T,3
         loss_vis = t.cat((t.full((T,1), step), loss_vis), dim=1)
         loss_vis = util.to_dict(loss_vis, key_dim=1, val_dims=())
-        # loss_vis = { k: [v] for k, v in loss_vis.items() }
         client.update('loss', step, loss_vis) 
         if step % 10 == 0:
             last_lr = sched.get_last_lr()[0]
             print(f'step = {step}, loss = {loss.item():5.3f}, lr = {last_lr:5.4f}')
 
-        """
-        # B*P, T+1, D
-        xgrid = util.make_grid(x, grid_dim=1, spatial_dim=2, ncols=8)
-        xgrid = util.to_dict(xgrid, key_dim=2, val_dims=())
-        client.update('q', step, xgrid) 
-        """
         # T,H,D+1 
         sigma_alphas = util.dim_to_data(rbf.sigma_alphas, 0) 
         sigma_alphas = util.to_dict(sigma_alphas, key_dim=2, val_dims=(), key_string='xyz')
