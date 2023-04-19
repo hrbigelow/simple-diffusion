@@ -19,6 +19,7 @@ class RBFNetwork(nn.Module):
         self.H = Hsqrt ** 2
         ls = t.linspace(-2, 2, Hsqrt)
         pts = t.cartesian_prod(ls, ls)
+        # 16, 2
         self.basis_centers = nn.Parameter(pts)
         self.basis_sigma_logits = nn.Parameter(t.full((self.H, self.D), -0.5))
         self.mu_alphas = nn.Parameter(t.full((self.T, self.H, self.D), 0.0))
