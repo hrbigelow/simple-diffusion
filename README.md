@@ -19,7 +19,7 @@ Unlike in the paper, this model is trained using a brute-force Monte-Carlo sampl
 procedure to minimize $D[q(x^{t-1}|x^t) || p(x^{t-1} | x^t)]$.  Briefly, this is
 possible because $q$ is constant.  Thus, it is possible to minimize this by
 minimizing a proxy objective of the NLL.  The full details are explained at
-[blog](https://mlcrumbs.com/diffusion)
+[blog](https://mlcrumbs.com/diffusion/public)
 
 One example of the learned drift term, displayed here as a vector field.  The
 line lengths are actual size - that is, the gridded start points represent $x^t$, and
@@ -27,7 +27,11 @@ the end points are $\mu(x^{t-1}) = f(x^t) + x^t$
 
 ![mu(x^t) (low t)](img/mu_vector_field.png)
 
-Here is a view of the full training dashboard.  In plots `mu_alphas`, `loss`, and
+Here is a view of the full training dashboard, using the settings:
+
+    python swissroll.py --batch_size 100 --sample_size 10 --lr 0.007
+
+In plots `mu_alphas`, `loss`, and
 `sigma_alphas`, purple represents t=0, while yellow is t=40.  The individual loss
 curves are $E_{x^{t-1},x^t)~q} [-log(x^{t-1} | x^t)]$.
 
