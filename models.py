@@ -83,9 +83,14 @@ class RBFNetwork(nn.Module):
 
 class QDist:
     """
-    Generate samples from q(x^{0:T})
+    Generate samples from q(x^{0:T}).  In the context of diffusion models, q(x^{0:T})
+    represents the 'forward trajectory' (Section 2.1, Eq. 3 of
+    https://arxiv.org/pdf/1503.03585.pdf).  The variable x^0 represents the data
+    domain, while x^{>0} are related to x^0 through the diffusion process.
+    A 'forward trajectory' is simply a single 'sample' from this joint distribution.
     """
     def __init__(self, sample_size, betas):
+        # sample_size is the number of trajectories sampled per data point
         self.sample_size = sample_size
         self.betas = betas
         self.alpha = (1.0 - self.betas) ** 0.5
@@ -96,10 +101,11 @@ class QDist:
         x0: P, D
         returns: B * P, T+1, D  (batch, num_points, num_timesteps+1)
         """
-        # sample a 'trajectory'
+        # sample `sample_size = B` different trajectories from each of the P x0 points 
         xi_pre = x0.repeat(self.sample_size, 1)
         total_reps = xi_pre.shape[0]
         x = [xi_pre]
+        # Appendix B.4, Table App.1 row 'Forward Diffusion Kernel' for Gaussian case
         for cond, alpha in zip(self.cond, self.alpha):
             xi = cond.sample(xi_pre.shape) + alpha * xi_pre  
             xi_pre = xi
